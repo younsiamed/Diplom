@@ -11,8 +11,10 @@ std::string remove_html_tags(const std::string& html) {
 
 std::string clean_text(const std::string& text) {
     std::string cleaned;
-    for (char c : text) {
-        if (std::isalnum(c) || std::isspace(c)) cleaned += std::tolower(c);
+    for (unsigned char c : text) {
+        if (std::isalnum(c) || std::isspace(c)) {
+            cleaned += std::tolower(c);
+        }
     }
     return cleaned;
 }

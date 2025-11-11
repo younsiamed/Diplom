@@ -60,7 +60,9 @@ private:
     bool stop = false;
 };
 
-std::string download_page(const std::string& url) {
+std::string download_page(const std::string& url, int redirect_count = 0) {
+    if (redirect_count > 5) throw std::runtime_error("Too many redirects");
+
     size_t pos = url.find("://");
     if (pos == std::string::npos) throw std::runtime_error("Invalid URL");
     std::string protocol = url.substr(0, pos);
@@ -109,6 +111,19 @@ std::string download_page(const std::string& url) {
         throw std::runtime_error("Unsupported protocol");
     }
 
+    if (res.result() == http::status::moved_permanently || res.result() == http::status::found ||
+        res.result() == http::status::see_other || res.result() == http::status::temporary_redirect ||
+        res.result() == http::status::permanent_redirect) {
+        auto location_it = res.find(http::field::location);
+        if (location_it != res.end()) {
+            std::string new_url = std::string(location_it->value());
+            if (new_url[0] == '/') new_url = protocol + "://" + host + new_url;
+            return download_page(new_url, redirect_count + 1);
+        } else {
+            throw std::runtime_error("Redirect without Location header");
+        }
+    }
+
     return beast::buffers_to_string(res.body().data());
 }
 
@@ -116,30 +131,26 @@ int main(int argc, char** argv) {
     try {
         auto config_map = parse_ini("config.ini");
         Config cfg(config_map);
-        Database db(cfg);
+        Database db(cfg);  // Основной DB для create_tables
         db.create_tables();
 
         ThreadPool pool(4);
-        std::set<std::string> visited;
-        std::mutex visited_mutex;
 
         std::function<void(const std::string&, int)> process_url;
         process_url = [&](const std::string& url, int depth) {
+            Database local_db(cfg);  // Локальный DB для потока
+
             if (depth > cfg.recursion_depth) return;
-            {
-                std::lock_guard<std::mutex> lock(visited_mutex);
-                if (visited.count(url)) return;
-                visited.insert(url);
-            }
+            if (local_db.doc_exists(url)) return;
 
             std::string html = download_page(url);
             std::string text = clean_text(remove_html_tags(html));
             auto freq = count_word_frequency(text);
-            int doc_id = db.get_or_insert_doc(url);
+            int doc_id = local_db.get_or_insert_doc(url);
 
             for (const auto& [word, count] : freq) {
-                int word_id = db.get_or_insert_word(word);
-                db.insert_frequency(word_id, doc_id, count);
+                int word_id = local_db.get_or_insert_word(word);
+                local_db.insert_frequency(word_id, doc_id, count);
             }
 
             if (depth < cfg.recursion_depth) {
@@ -150,7 +161,7 @@ int main(int argc, char** argv) {
             }
         };
 
-        process_url(cfg.start_page, 1);
+        pool.enqueue([&] { process_url(cfg.start_page, 1); });
     } catch (std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
     }

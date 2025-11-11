@@ -16,28 +16,40 @@ void Database::create_tables() {
     txn.commit();
 }
 
+bool Database::doc_exists(const std::string& url) {
+    pqxx::work txn(conn);
+    pqxx::params p(url);
+    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM documents WHERE url = $1;"), p);
+    return !res.empty();
+}
+
 int Database::get_or_insert_doc(const std::string& url) {
     pqxx::work txn(conn);
-    pqxx::result res = txn.exec_params("SELECT id FROM documents WHERE url = $1;", url);
+    pqxx::params p_select(url);
+    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM documents WHERE url = $1;"), p_select);
     if (!res.empty()) return res[0][0].as<int>();
-    res = txn.exec_params("INSERT INTO documents (url) VALUES ($1) RETURNING id;", url);
+    pqxx::params p_insert(url);
+    res = txn.exec(pqxx::zview("INSERT INTO documents (url) VALUES ($1) RETURNING id;"), p_insert);
     txn.commit();
     return res[0][0].as<int>();
 }
 
 int Database::get_or_insert_word(const std::string& word) {
     pqxx::work txn(conn);
-    pqxx::result res = txn.exec_params("SELECT id FROM words WHERE word = $1;", word);
+    pqxx::params p_select(word);
+    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM words WHERE word = $1;"), p_select);
     if (!res.empty()) return res[0][0].as<int>();
-    res = txn.exec_params("INSERT INTO words (word) VALUES ($1) RETURNING id;", word);
+    pqxx::params p_insert(word);
+    res = txn.exec(pqxx::zview("INSERT INTO words (word) VALUES ($1) RETURNING id;"), p_insert);
     txn.commit();
     return res[0][0].as<int>();
 }
 
 void Database::insert_frequency(int word_id, int doc_id, int freq) {
     pqxx::work txn(conn);
-    txn.exec_params("INSERT INTO word_doc (word_id, doc_id, frequency) VALUES ($1, $2, $3) "
-                    "ON CONFLICT DO NOTHING;", word_id, doc_id, freq);
+    pqxx::params p(word_id, doc_id, freq);
+    txn.exec(pqxx::zview("INSERT INTO word_doc (word_id, doc_id, frequency) VALUES ($1, $2, $3) "
+                    "ON CONFLICT DO NOTHING;"), p);
     txn.commit();
 }
 
