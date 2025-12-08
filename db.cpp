@@ -1,6 +1,7 @@
 #include "db.h"
 #include <sstream>
-#include <pqxx/params.hxx>
+#include <stdexcept>
+#include <pqxx/pqxx>
 
 Database::Database(const Config& cfg) : conn(
     "dbname=" + cfg.db_name + " user=" + cfg.db_user + " password=" + cfg.db_password +
@@ -16,65 +17,53 @@ void Database::create_tables() {
     txn.commit();
 }
 
-bool Database::doc_exists(const std::string& url) {
-    pqxx::work txn(conn);
-    pqxx::params p(url);
-    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM documents WHERE url = $1;"), p);
-    return !res.empty();
-}
-
 int Database::get_or_insert_doc(const std::string& url) {
     pqxx::work txn(conn);
-    pqxx::params p_select(url);
-    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM documents WHERE url = $1;"), p_select);
+    pqxx::result res = txn.exec("SELECT id FROM documents WHERE url = " + txn.quote(url));
     if (!res.empty()) return res[0][0].as<int>();
-    pqxx::params p_insert(url);
-    res = txn.exec(pqxx::zview("INSERT INTO documents (url) VALUES ($1) RETURNING id;"), p_insert);
+    res = txn.exec("INSERT INTO documents (url) VALUES (" + txn.quote(url) + ") RETURNING id");
     txn.commit();
     return res[0][0].as<int>();
 }
 
 int Database::get_or_insert_word(const std::string& word) {
     pqxx::work txn(conn);
-    pqxx::params p_select(word);
-    pqxx::result res = txn.exec(pqxx::zview("SELECT id FROM words WHERE word = $1;"), p_select);
+    pqxx::result res = txn.exec("SELECT id FROM words WHERE word = " + txn.quote(word));
     if (!res.empty()) return res[0][0].as<int>();
-    pqxx::params p_insert(word);
-    res = txn.exec(pqxx::zview("INSERT INTO words (word) VALUES ($1) RETURNING id;"), p_insert);
+    res = txn.exec("INSERT INTO words (word) VALUES (" + txn.quote(word) + ") RETURNING id");
     txn.commit();
     return res[0][0].as<int>();
 }
 
 void Database::insert_frequency(int word_id, int doc_id, int freq) {
     pqxx::work txn(conn);
-    pqxx::params p(word_id, doc_id, freq);
-    txn.exec(pqxx::zview("INSERT INTO word_doc (word_id, doc_id, frequency) VALUES ($1, $2, $3) "
-                    "ON CONFLICT DO NOTHING;"), p);
+    txn.exec("INSERT INTO word_doc (word_id, doc_id, frequency) VALUES (" +
+             std::to_string(word_id) + ", " + std::to_string(doc_id) + ", " + 
+             std::to_string(freq) + ") ON CONFLICT (word_id, doc_id) DO UPDATE SET frequency = EXCLUDED.frequency");
     txn.commit();
 }
 
 std::vector<std::pair<std::string, int>> Database::search(const std::vector<std::string>& query_words) {
     if (query_words.empty() || query_words.size() > 4) return {};
     pqxx::work txn(conn);
+    
     std::stringstream ss;
     ss << "SELECT d.url, SUM(wd.frequency) as rel "
        << "FROM documents d "
        << "JOIN word_doc wd ON d.id = wd.doc_id "
        << "JOIN words w ON w.id = wd.word_id "
        << "WHERE w.word IN (";
+    
     for (size_t i = 0; i < query_words.size(); ++i) {
         if (i > 0) ss << ", ";
-        ss << "$" << (i + 1);
+        ss << txn.quote(query_words[i]);
     }
+    
     ss << ") GROUP BY d.id "
        << "HAVING COUNT(DISTINCT w.word) = " << query_words.size()
        << " ORDER BY rel DESC LIMIT 10;";
     
-    pqxx::params p;
-    for (const auto& word : query_words) {
-        p.append(word);
-    }
-    pqxx::result res = txn.exec(ss.str(), p);
+    pqxx::result res = txn.exec(ss.str());
     std::vector<std::pair<std::string, int>> results;
     for (auto row : res) {
         results.emplace_back(row[0].as<std::string>(), row[1].as<int>());

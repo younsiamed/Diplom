@@ -2,7 +2,7 @@
 
 Запустите `bootstrap-vcpkg.bat`
 
-Установите пакеты: `./vcpkg install boost-beast:x64-windows boost-system:x64-windows boost-locale:x64-windows libpqxx:x64-windows pugixml:x64-windows openssl:x64-windows`
+Установите пакеты: `./vcpkg install boost-beast:x64-windows boost-system:x64-windows boost-locale:x64-windows libpqxx:x64-windows libxml2:x64-windows openssl:x64-windows`
 
 Выполните `./vcpkg integrate install`
 
